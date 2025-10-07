@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Turing complete universal scrolling machine/matrix</title>
+<style>
+html, body
+{
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  height: 100%;
+  font-family: monospace;
+}
+
+#grid
+{
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #fff;
+  cursor: grab;
+  touch-action: none; /* disable browser pinch/scroll */
+}
+
+.cell
+{
+  position: absolute;
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+  font-size: 10px;
+  padding: 4px 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  user-select: none;
+}
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+function root(a,b)
+{
+  try
+  {
+    let s = a + 1n; 
+    let k1 = b - 1n; 
+    let u = a; 
+    while (u < s) 
+    { 
+      s = u; 
+      u = ((u*k1) + a / (u ** k1)) / b; 
+    } 
+    return s; 
+  }
+  catch(e)
+  {
+    return 0n;
+  }
+}
+function pair(a,b) { return 2n**a*(2n*b+1n)-1n; }
+function unpair(n) { let a=0n; n+=1n; while(!(n%2n)) { n = n/2n; a += 1n; } return [a,(n-1n)/2n]; }
+function pairAll(...xs)
+{
+  let r = xs[xs.length-1];
+  for(let i=xs.length-2;i>-1;i-=1) r = pair(xs[i],r)
+  return r;
+}
+function unpairAll(n)
+{
+  if(n===0n) return [0n];
+  let [a,b] = unpair(n);
+  let r = [a];
+  return r.concat(unpairAll(b));
+}
+function cantorPair(a,b) { return (a+b)*(a+b+1n)/2n+b; }
+function cantorUnpair(n)
+{
+  let w = ((root(8n * n + 1n,2n)) - 1n) / 2n; 
+  let t = (w * w + w) / 2n; 
+  let y = n - t; 
+  let x = w - y; 
+  return [x,y];
+}
+function bytesToN(s)
+{
+  let r = 0n;
+  let z = 0n;
+  for(let i=0;i<s.length;i+=1) r += BigInt(s[i])*256n**BigInt(i);
+  for(let i=s.length-1;i>=0&&s[i]==0;i-=1) z += 1n;
+  return pair(z,r);
+}
+function pairToBytes([l,m])
+{
+  let r = [];
+  let k = m;
+  while(k) 
+  {
+    r.push(Number(k%256n));
+    k = k/256n;
+  }
+  return new Uint8Array(r.concat(Array(Number(l)).fill(0)));
+}
+function nToBytes(n)
+{
+  let [l,m] = unpair(n);
+  return pairToBytes(l,m);
+}
+
+let utf8Encode = new TextEncoder();
+let utf8Decode = new TextDecoder();
+function stringToN(s) { return bytesToN(utf8Encode.encode(s)); }
+function nToString(n) { return utf8Decode.decode(nToBytes(n)); }
+function pairToString(n) { return utf8Decode.decode(pairToBytes(n)); }
+function f(n)
+{
+  let [i,src,...regs] = unpairAll(n);
+  let instructions = unpairAll(src||0n);
+  let [inst,ops] = unpair(instructions[i]||0n);
+  let [op1,op2] = unpair(ops);
+  if(i<instructions.length)
+  {
+    switch(inst)
+    {
+      case 0n: if(regs[op1]) { i = op2; break; } i+=1n; break;
+      case 1n: if(regs[op1]) regs[op1]++; else regs[op1] = 1n; i+=1n; break;
+      case 2n: if(regs[op1]) regs[op1]--; i+=1n; break;
+    }
+  }
+  return pairAll(i||0n,src||0n,...regs||[]);
+}
+
+function g(x)
+{
+  let [i,src,...regs] = unpairAll(x);
+  return regs[0]||0n;
+}
+
+function t(a,b)
+{ 
+  //let x = unpair(b);
+  //let x = cantorUnpair(b);
+  let x = pairAll(0n,b,0n);
+  let c = x;
+  for(let i=0n;i<=a;i+=1n)
+  {
+    c = x;
+    x = f(c);
+    if(x==c) return "<span style='color:green'>"+g(x)+"</span>"; // x[0]+"."+x[1];
+  }
+  return g(x);
+}
+const grid = document.getElementById("grid")
+const cellSize = 60
+
+let baseCol = 0n;
+let baseRow = 0n;
+let panX = 0;
+let panY = 0;
+let isPanning = false;
+let lastX = 0;
+let lastY = 0;
+
+const cellCache = new Map();
+let needsRender = true;
+
+// Parse "?X,Y"
+{
+  const m = location.search.match(/\?(-?\d+),(-?\d+)/);
+  if (m)
+  {
+    baseCol = BigInt(m[2]);
+    baseRow = BigInt(m[1]);
+  }
+}
+
+// Mouse panning
+grid.addEventListener("mousedown", e =>
+{
+  isPanning = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  grid.style.cursor = "grabbing";
+});
+
+document.addEventListener("mouseup", () =>
+{
+  isPanning = false;
+  grid.style.cursor = "grab";
+});
+
+document.addEventListener("mousemove", e =>
+{
+  if (!isPanning) return;
+  const dx = e.clientX - lastX;
+  const dy = e.clientY - lastY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  panX += dx;
+  panY += dy;
+  adjustOffsets();
+  needsRender = true;
+});
+
+// Mouse wheel vertical/horizontal scroll
+grid.addEventListener("wheel", e =>
+{
+  e.preventDefault()
+  const delta = e.deltaY
+  const shift = e.shiftKey
+
+  if (shift)
+  {
+    panX -= delta;   // Shift+Wheel → horizontal scroll
+  }
+  else
+  {
+    panY -= delta;   // Wheel → vertical scroll
+  }
+
+  adjustOffsets();
+  needsRender = true;
+}, { passive: false });
+
+grid.addEventListener("touchstart", e =>
+{
+  if (e.touches.length === 1)
+  {
+    isPanning = true
+    lastX = e.touches[0].clientX
+    lastY = e.touches[0].clientY
+  }
+})
+
+grid.addEventListener("touchmove", e =>
+{
+  if (!isPanning || e.touches.length !== 1) return
+  e.preventDefault()
+  const dx = e.touches[0].clientX - lastX
+  const dy = e.touches[0].clientY - lastY
+  lastX = e.touches[0].clientX
+  lastY = e.touches[0].clientY
+  panX += dx
+  panY += dy
+  adjustOffsets()
+  needsRender = true
+}, { passive: false })
+
+grid.addEventListener("touchend", () =>
+{
+  isPanning = false
+})
+
+// Keep offsets within one cell boundary
+function adjustOffsets()
+{
+  while (panX > cellSize)
+  {
+    baseCol -= 1n;
+    panX -= cellSize;
+  }
+  while (panX < -cellSize)
+  {
+    baseCol += 1n;
+    panX += cellSize;
+  }
+  while (panY > cellSize)
+  {
+    baseRow -= 1n;
+    panY -= cellSize;
+  }
+  while (panY < -cellSize)
+  {
+    baseRow += 1n;
+    panY += cellSize;
+  }
+}
+
+window.addEventListener("resize", () => needsRender = true);
+
+// Render visible cells, reuse DOM nodes
+function draw()
+{
+  const cols = Math.ceil(window.innerWidth / cellSize) + 2;
+  const rows = Math.ceil(window.innerHeight / cellSize) + 2;
+
+  const startCol = baseCol + BigInt(Math.floor(-panX / cellSize)) - 1n;
+  const startRow = baseRow + BigInt(Math.floor(-panY / cellSize)) - 1n;
+
+  const deltaCol = Number(startCol - baseCol);
+  const deltaRow = Number(startRow - baseRow);
+
+  const visibleKeys = new Set();
+
+  for (let j = 0; j < rows; j++)
+  {
+    for (let i = 0; i < cols; i++)
+    {
+      const col = startCol + BigInt(i);
+      const row = startRow + BigInt(j);
+      const key = col + "," + row;
+      visibleKeys.add(key);
+
+      let node = cellCache.get(key)
+      if (!node)
+      {
+        node = document.createElement("div");
+        node.className = "cell";
+        cellCache.set(key, node);
+        grid.appendChild(node);
+      }
+
+      const left = (deltaCol + i) * cellSize + panX;
+      const top = (deltaRow + j) * cellSize + panY;
+
+      node.style.left = left + "px";
+      node.style.top = top + "px";
+
+      //const text = col + "," + row
+      const text = t(row>0n?row:-row,col>0n?col:-col);
+      if (node.innerHTML !== text)
+      {
+        node.innerHTML = text;
+        //node.title = text;
+        //node.title = g(text);
+      }
+    }
+  }
+
+  for (const [key, node] of cellCache)
+  {
+    if (!visibleKeys.has(key))
+    {
+      node.remove();
+      cellCache.delete(key);
+    }
+  }
+}
+
+// Animation loop
+function loop()
+{
+  if (needsRender)
+  {
+    draw();
+    needsRender = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+needsRender = true;
+loop();
+</script>
+</body>
+</html>
